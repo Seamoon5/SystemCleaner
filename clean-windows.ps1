@@ -4,7 +4,10 @@ param(
     [switch]$All,
     [switch]$DryRun,
     [switch]$Schedule,
-    [switch]$RemoveSchedule
+    [switch]$RemoveSchedule,
+    [switch]$Startup,
+    [switch]$RemoveStartup,
+    [switch]$StartupClean
 )
 
 $ErrorActionPreference = "Continue"
@@ -237,8 +240,9 @@ function Set-Schedule {
     try {
         $trigger = New-ScheduledTaskTrigger -Daily -At 9am
         $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptDir\clean-windows.ps1`" -Clean -All"
+        $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
         Unregister-ScheduledTask -TaskName "SystemCleaner Daily" -Confirm:$false -ErrorAction SilentlyContinue
-        Register-ScheduledTask -TaskName "SystemCleaner Daily" -Trigger $trigger -Action $action -Description "Runs SystemCleaner every day at 09:00" -Force | Out-Null
+        Register-ScheduledTask -TaskName "SystemCleaner Daily" -Trigger $trigger -Action $action -Settings $settings -Description "Runs SystemCleaner every day at 09:00 (catches up if the PC was off)" -Force | Out-Null
         Write-Host "Scheduled task 'SystemCleaner Daily' created (runs every day at 09:00)." -ForegroundColor Green
         Write-Log "Scheduled daily 09:00 task created"
     } catch {
@@ -257,15 +261,62 @@ function Remove-Schedule {
     }
 }
 
-if ($Schedule) { Set-Schedule }
-if ($RemoveSchedule) { Remove-Schedule }
-
-$isAdmin = Test-Admin
-if (-not $isAdmin -and $Schedule) {
-    Write-Host "Note: the task may need admin rights for system categories." -ForegroundColor DarkYellow
+function Set-Startup {
+    try {
+        $trigger = New-ScheduledTaskTrigger -AtLogOn
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptDir\clean-windows.ps1`" -StartupClean"
+        Unregister-ScheduledTask -TaskName "SystemCleaner Startup" -Confirm:$false -ErrorAction SilentlyContinue
+        Register-ScheduledTask -TaskName "SystemCleaner Startup" -Trigger $trigger -Action $action -Description "SystemCleaner smart clean at logon (skips if already cleaned today)" -Force | Out-Null
+        Write-Host "Startup clean enabled: runs when you log in, only if today's clean hasn't run yet." -ForegroundColor Green
+        Write-Log "Startup clean enabled"
+    } catch {
+        Write-Host "Could not enable startup clean. Error: $($_.Exception.Message)" -ForegroundColor Red
+    }
 }
 
-if ($Clean) {
+function Remove-Startup {
+    $task = Get-ScheduledTask -TaskName "SystemCleaner Startup" -ErrorAction SilentlyContinue
+    if ($task) {
+        Unregister-ScheduledTask -TaskName "SystemCleaner Startup" -Confirm:$false
+        Write-Host "Startup clean disabled." -ForegroundColor Green
+        Write-Log "Startup clean disabled"
+    } else {
+        Write-Host "Startup clean wasn't enabled (nothing to remove)." -ForegroundColor Yellow
+    }
+}
+
+if ($Schedule) { Set-Schedule }
+if ($RemoveSchedule) { Remove-Schedule }
+if ($Startup) { Set-Startup }
+if ($RemoveStartup) { Remove-Startup }
+
+$isAdmin = Test-Admin
+
+$cleanedToday = $false
+$todayPattern = Get-Date -Format "yyyy-MM-dd"
+if (Test-Path -LiteralPath $LogFile) {
+    $cleanedToday = [bool](Select-String -LiteralPath $LogFile -Pattern $todayPattern -SimpleMatch -Quiet -ErrorAction SilentlyContinue)
+}
+
+if ($StartupClean) {
+    if ($cleanedToday) {
+        Write-Host "Startup check: already cleaned today. Skipping." -ForegroundColor DarkGray
+    } else {
+        Show-Scan "startup clean (today's clean hasn't run yet)"
+        Write-Host "Cleaning all safe categories..." -ForegroundColor Cyan
+        $totalFreed = 0.0
+        foreach ($c in $categories) {
+            if ($c.NeedsAdmin -and -not $isAdmin) {
+                Write-Host ("  skipped '{0}': needs administrator rights" -f $c.Name) -ForegroundColor DarkYellow
+                continue
+            }
+            $totalFreed += Invoke-CleanCategory $c
+        }
+        Write-Host ("Total freed: {0}" -f (Format-Size $totalFreed)) -ForegroundColor Green
+        Write-Host ""
+        Write-Host "Done. Log saved to: $LogFile" -ForegroundColor DarkGray
+    }
+} elseif ($Clean) {
     if ($DryRun) {
         Write-Host "DRY RUN: showing what WOULD be cleaned. Nothing deleted." -ForegroundColor Magenta
         Show-Scan "dry run"
@@ -287,13 +338,15 @@ if ($Clean) {
         Invoke-InteractiveClean
     }
 } else {
-    if (-not $Schedule -and -not $RemoveSchedule) {
+    if (-not $Schedule -and -not $RemoveSchedule -and -not $Startup -and -not $RemoveStartup) {
         Show-Scan "scan report (nothing was deleted)"
         Write-Host "To clean:  .\clean-windows.ps1 -Clean          (pick items)"
         Write-Host "To clean all safe items: .\clean-windows.ps1 -Clean -All"
         Write-Host "To preview only:          .\clean-windows.ps1 -Clean -All -DryRun"
         Write-Host "To auto-run daily:        .\clean-windows.ps1 -Schedule"
         Write-Host "To stop auto-run:         .\clean-windows.ps1 -RemoveSchedule"
+        Write-Host "To clean at startup:      .\clean-windows.ps1 -Startup"
+        Write-Host "To stop startup clean:    .\clean-windows.ps1 -RemoveStartup"
         Write-Host ""
         Write-Host "Log file: $LogFile"
     }

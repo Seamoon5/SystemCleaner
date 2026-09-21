@@ -1,5 +1,5 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal
 title SystemCleaner
 color 0A
 
@@ -17,8 +17,12 @@ echo   2. Clean - pick what to clean
 echo   3. Clean everything safe
 echo   4. Preview what a full clean would remove
 echo   5. Run every day at 09:00 automatically
-echo   6. Stop the automatic run
+echo      (missed at 09:00? it runs when you start the PC)
+echo   6. Stop the automatic daily run
 echo   7. View the cleaner log
+echo   8. Clean at every startup (only if today's not
+echo      cleaned yet - smart, no wasted work)
+echo   9. Stop the startup clean
 echo   0. Exit
 echo.
 echo ============================================
@@ -51,6 +55,14 @@ if "%choice%"=="6" (
 )
 if "%choice%"=="7" (
     powershell -NoProfile -ExecutionPolicy Bypass -Command "$L=\"%FOLDER%SystemCleaner-windows.log\"; if (Test-Path $L) { Get-Content $L -Tail 50 } else { Write-Host 'No log yet - run a clean first.' -ForegroundColor Yellow }"
+    goto done
+)
+if "%choice%"=="8" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" -Startup
+    goto done
+)
+if "%choice%"=="9" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" -RemoveStartup
     goto done
 )
 if "%choice%"=="0" (

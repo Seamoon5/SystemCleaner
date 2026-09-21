@@ -2,6 +2,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_FILE="$SCRIPT_DIR/SystemCleaner-linux.log"
+MARKER="$SCRIPT_DIR/SystemCleaner-last-date.txt"
 
 CYAN=$'\033[36m'
 GREEN=$'\033[32m'
@@ -114,9 +115,12 @@ show_scan() {
 
 clean_category_apt() {
     if command -v apt-get >/dev/null 2>&1; then
-        echo -e "  ${GREEN}cleaned apt package cache${NONE}"
-        (sudo apt-get clean) >/dev/null 2>&1 || echo -e "  ${YELLOW}could not clean apt cache (need sudo?)${NONE}"
-        log_msg "Cleaned apt package cache"
+        if (sudo apt-get clean) >/dev/null 2>&1; then
+            echo -e "  ${GREEN}cleaned apt package cache${NONE}"
+            log_msg "Cleaned apt package cache"
+        else
+            echo -e "  ${YELLOW}skipped apt cache (needs your sudo password)${NONE}"
+        fi
     fi
 }
 
@@ -175,6 +179,7 @@ clean_all() {
     done
     echo -e "${GREEN}Done. Log: $LOG_FILE${NONE}"
     echo ""
+    date '+%Y-%m-%d' > "$MARKER"
 
     if [ "$is_wsl" = "true" ]; then
         echo -e "${MAGENTA}WSL tip:${NONE} cleaning WSL files does not by itself give disk space back to Windows."
@@ -212,6 +217,7 @@ clean_select() {
     done
     echo -e "${GREEN}Done. Log: $LOG_FILE${NONE}"
     echo ""
+    date '+%Y-%m-%d' > "$MARKER"
 }
 
 dry_run() {
@@ -221,21 +227,59 @@ dry_run() {
 }
 
 cmd_schedule() {
-    local cron_exists
-    cron_exists=$(crontab -l 2>/dev/null | grep -c "clean-linux.sh")
-    if [ "$cron_exists" -gt 0 ]; then
-        echo -e "${YELLOW}Schedule already exists (daily task is already installed).${NONE}"
+    local has_daily has_reboot
+    has_daily=$(crontab -l 2>/dev/null | grep -c "^0 9 \* \* \*.*clean-linux.sh")
+    has_reboot=$(crontab -l 2>/dev/null | grep -c "^@reboot.*clean-linux.sh")
+    if [ "$has_daily" -gt 0 ] && [ "$has_reboot" -gt 0 ]; then
+        echo -e "${YELLOW}Already installed: daily 09:00 clean + missed-run catch-up.${NONE}"
         return
     fi
-    ( crontab -l 2>/dev/null | grep -v "clean-linux.sh" ; echo "0 9 * * * /bin/bash $SCRIPT_DIR/clean-linux.sh clean all >>$LOG_FILE 2>&1" ) | crontab -
-    echo -e "${GREEN}Scheduled: this cleaner now runs every day at 09:00 automatically.${NONE}"
-    log_msg "Scheduled daily clean via cron (09:00)"
+    ( crontab -l 2>/dev/null | grep -v "clean-linux.sh" \
+      ; echo "0 9 * * * /bin/bash $SCRIPT_DIR/clean-linux.sh clean all >>$LOG_FILE 2>&1" \
+      ; echo "@reboot /bin/bash $SCRIPT_DIR/clean-linux.sh catchup >>$LOG_FILE 2>&1" \
+    ) | crontab -
+    echo -e "${GREEN}Scheduled: daily clean at 09:00, with catch-up when the PC missed it.${NONE}"
+    echo -e "${GREEN}If your PC is off at 09:00, opening it later runs the missed clean once.${NONE}"
+    log_msg "Scheduled daily clean + catch-up via cron (09:00 / @reboot)"
 }
 
 cmd_unschedule() {
     ( crontab -l 2>/dev/null | grep -v "clean-linux.sh" ) | crontab -
     echo -e "${GREEN}Auto-run removed. You can still run it manually anytime.${NONE}"
     log_msg "Removed auto-run schedule"
+}
+
+cmd_catchup() {
+    local today
+    today=$(date '+%Y-%m-%d')
+    if [ -f "$MARKER" ] && [ "$(cat "$MARKER" 2>/dev/null)" = "$today" ]; then
+        echo -e "${GREEN}Catch-up check: already cleaned today ($today). Skipping.${NONE}"
+        return
+    fi
+    if [ "$is_wsl" = "true" ]; then
+        echo -e "${CYAN}Catch-up: today's clean hasn't run yet (PC missed it) — cleaning now.${NONE}"
+    else
+        echo -e "${CYAN}Catch-up: today's clean hasn't run yet — cleaning now.${NONE}"
+    fi
+    clean_all
+}
+
+cmd_startup() {
+    local has_reboot
+    has_reboot=$(crontab -l 2>/dev/null | grep -c "^@reboot.*clean-linux.sh")
+    if [ "$has_reboot" -gt 0 ]; then
+        echo -e "${YELLOW}Startup clean already enabled.${NONE}"
+        return
+    fi
+    ( crontab -l 2>/dev/null | grep -v "^@reboot.*clean-linux.sh" ; echo "@reboot /bin/bash $SCRIPT_DIR/clean-linux.sh catchup >>$LOG_FILE 2>&1" ) | crontab -
+    echo -e "${GREEN}Startup clean enabled: cleans when you open WSL, only if today's clean hasn't run yet.${NONE}"
+    log_msg "Enabled startup catch-up clean (@reboot)"
+}
+
+cmd_nostartup() {
+    ( crontab -l 2>/dev/null | grep -v "^@reboot.*clean-linux.sh" ) | crontab -
+    echo -e "${GREEN}Startup clean disabled.${NONE}"
+    log_msg "Disabled startup catch-up clean"
 }
 
 usage() {
@@ -246,8 +290,10 @@ usage() {
     echo "  ./clean-linux.sh clean apt cache     clean only the listed categories"
     echo "  ./clean-linux.sh clean               ask which categories to clean"
     echo "  ./clean-linux.sh dry-run             preview without deleting"
-    echo "  ./clean-linux.sh schedule            auto-run every day at 09:00"
-    echo "  ./clean-linux.sh unschedule          stop the auto-run"
+    echo "  ./clean-linux.sh schedule            daily 09:00 clean + catch-up if missed"
+    echo "  ./clean-linux.sh unschedule          stop the daily auto-run"
+    echo "  ./clean-linux.sh startup             clean at WSL startup (smart, skips if done today)"
+    echo "  ./clean-linux.sh nostartup           stop the startup clean"
     echo "  ./clean-linux.sh log                 show the cleaner log"
     echo "  ./clean-linux.sh help                show this help"
     echo ""
@@ -263,6 +309,9 @@ case "$cmd" in
     dry-run) dry_run ;;
     schedule) cmd_schedule ;;
     unschedule) cmd_unschedule ;;
+    catchup) cmd_catchup ;;
+    startup) cmd_startup ;;
+    nostartup) cmd_nostartup ;;
     log) tail -n 50 "$LOG_FILE" 2>/dev/null || echo "No log entries yet." ;;
     help|--help|-h) usage ;;
     *)

@@ -36,9 +36,11 @@ opens — just type a number and press Enter:
 2 = Clean - pick what to clean
 3 = Clean everything safe
 4 = Preview what a full clean would remove
-5 = Run every day at 09:00 automatically
-6 = Stop the automatic run
+5 = Run every day at 09:00 automatically (missed it? runs when you start the PC)
+6 = Stop the automatic daily run
 7 = View the cleaner log
+8 = Clean at startup (smart: only if today's not cleaned yet)
+9 = Stop the startup clean
 0 = Exit
 ```
 
@@ -56,8 +58,14 @@ Then run one of these:
 | `.\clean-windows.ps1 -Clean` | Ask which items to clean |
 | `.\clean-windows.ps1 -Clean -All` | Clean everything safe |
 | `.\clean-windows.ps1 -Clean -All -DryRun` | Preview without deleting |
-| `.\clean-windows.ps1 -Schedule` | Auto-run every day at 09:00 |
+| `.\clean-windows.ps1 -Schedule` | Daily 09:00 run + catch-up if the PC was off |
 | `.\clean-windows.ps1 -RemoveSchedule` | Stop the auto-run |
+| `.\clean-windows.ps1 -Startup` | Clean at logon (smart: only if today's clean hasn't run) |
+| `.\clean-windows.ps1 -RemoveStartup` | Stop the startup clean |
+
+**Catch-up (new in v1.2):** the 09:00 task has "run as soon as possible after a missed
+start" enabled. If your PC is off or asleep at 09:00, the clean happens the moment you
+turn it on — so a day is never skipped.
 
 First time only: if PowerShell refuses to run scripts, allow it for this folder with
 `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` before running.
@@ -75,11 +83,24 @@ From this folder (or anywhere):
 ./clean-linux.sh clean all     # clean everything safe
 ./clean-linux.sh clean apt cache   # clean only the listed categories
 ./clean-linux.sh dry-run       # preview without deleting
-./clean-linux.sh schedule      # auto-run every day at 09:00
-./clean-linux.sh unschedule    # stop the auto-run
+./clean-linux.sh schedule      # daily 09:00 clean + catch-up if missed
+./clean-linux.sh unschedule    # stop the daily auto-run
+./clean-linux.sh startup       # clean at WSL startup (smart, skips if done today)
+./clean-linux.sh nostartup     # stop the startup clean
 ./clean-linux.sh log           # see the cleaner log
 ./clean-linux.sh help          # all commands
 ```
+
+**How the catch-up works (v1.2):** `schedule` installs a 09:00 daily clean *plus* an
+`@reboot` entry. If the PC was off at 09:00, grabbing your laptop later runs the missed
+clean exactly once — a small marker file records the day so it never cleans twice. On
+Windows the job "starts as soon as possible" too, so both sides catch up after a missed
+time.
+
+**WSL cron note:** the Linux scheduler needs the cron service running inside WSL. If
+`./clean-linux.sh schedule` shows the message but nothing ever auto-runs, start cron once
+with `sudo service cron start` (on older WSL setups), or just use the Windows menu —
+its Task Scheduler needs no setup.
 
 ### What it cleans
 
@@ -124,6 +145,13 @@ wins are the big caches (browsers + package managers) plus emptying the recycle 
 Run `schedule` once on each machine and forget about it — it cleans itself while you sleep.
 
 ## Version history
+
+**v1.2 — 2026-09-20 — Catch-up + clean at startup**
+- Missed a 09:00 run? It now catches up: Windows runs the task as soon as the PC is on,
+  Linux checks on startup via a marker file. A day is never skipped.
+- New `-Startup` / `-RemoveStartup` switches and menu options 8/9: clean at logon
+  (smart — only runs if today's clean hasn't happened yet, so no wasted work).
+- Linux additions: `catchup`, `startup`, `nostartup` subcommands.
 
 **v1.1 — 2026-09-20 — Double-click menu**
 - Added `SystemCleaner.bat`: a double-click Windows menu (scan / clean / preview /
