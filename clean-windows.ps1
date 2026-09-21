@@ -64,7 +64,7 @@ function Remove-FolderContents {
 }
 
 function Remove-RecycleBin {
-    Clear-RecycleBin -DriveLetter $null -Force -ErrorAction SilentlyContinue
+    Clear-RecycleBin -Force -ErrorAction SilentlyContinue
 }
 
 function Write-Log {
